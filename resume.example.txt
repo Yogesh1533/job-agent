@@ -1,0 +1,2 @@
+Copy this file to resume.txt and replace with your own plain-text resume
+(experience, skills, projects). It's used to tailor AI-drafted cover notes.
