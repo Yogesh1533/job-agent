@@ -18,12 +18,16 @@ def fetch_remoteok_jobs():
         jobs.append(
             Job(
                 id=str(entry.get("id")),
-                title=entry.get("position", ""),
-                company=entry.get("company", ""),
-                location=entry.get("location", "Remote"),
-                url=entry.get("url", ""),
-                description=entry.get("description", ""),
-                tags=entry.get("tags", []),
+                # RemoteOK entries may carry explicit null values, and dict.get()
+                # only substitutes the default when the key is absent, not when
+                # it is present-but-null. Coalesce with `or` so downstream string
+                # ops (matcher's join/lower) never see None.
+                title=entry.get("position") or "",
+                company=entry.get("company") or "",
+                location=entry.get("location") or "Remote",
+                url=entry.get("url") or "",
+                description=entry.get("description") or "",
+                tags=entry.get("tags") or [],
             )
         )
     return jobs

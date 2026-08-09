@@ -5,3 +5,6 @@ venv/
 .env
 resume.txt
 results.md
+
+.coverage
+.pytest_cache/
