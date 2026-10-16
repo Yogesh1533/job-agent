@@ -1,10 +1,5 @@
-import os
-
-import anthropic
-
+from job_agent import llm
 from job_agent.utils import strip_html
-
-DEFAULT_MODEL = "claude-sonnet-5-5"
 
 PROMPT_TEMPLATE = """You are helping a job seeker draft a short, tailored cover note for a job application.
 
@@ -21,12 +16,8 @@ experience to this specific role. Be specific, not generic. Do not invent \
 experience that isn't in the resume."""
 
 
-def get_model():
-    return os.getenv("MODEL") or DEFAULT_MODEL
-
-
-def draft_application(job, resume_text, client=None):
-    client = client or anthropic.Anthropic()
+def draft_application(job, resume_text, generate=None):
+    generate = generate or llm.generate
 
     prompt = PROMPT_TEMPLATE.format(
         resume=resume_text,
@@ -34,10 +25,4 @@ def draft_application(job, resume_text, client=None):
         company=job.company,
         description=strip_html(job.description)[:4000],
     )
-
-    response = client.messages.create(
-        model=get_model(),
-        max_tokens=500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.content[0].text
+    return generate(prompt, max_tokens=500).strip()

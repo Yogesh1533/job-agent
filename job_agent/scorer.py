@@ -6,9 +6,7 @@ Claude returns JSON: {"score": 0-100, "reasons": [...], "missing_skills": [...]}
 import json
 import re
 
-import anthropic
-
-from job_agent.drafter import get_model
+from job_agent import llm
 from job_agent.utils import strip_html
 
 SCORE_PROMPT = """You are screening a job posting for a job seeker. Compare the resume to the job and rate the fit.
@@ -63,8 +61,8 @@ def parse_score(text):
     }
 
 
-def score_job(job, resume_text, client=None):
-    client = client or anthropic.Anthropic()
+def score_job(job, resume_text, generate=None):
+    generate = generate or llm.generate
     prompt = SCORE_PROMPT.format(
         resume=resume_text,
         title=job.title,
@@ -72,12 +70,7 @@ def score_job(job, resume_text, client=None):
         location=job.location,
         description=strip_html(job.description)[:4000],
     )
-    response = client.messages.create(
-        model=get_model(),
-        max_tokens=400,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    result = parse_score(response.content[0].text)
+    result = parse_score(generate(prompt, max_tokens=400, json_mode=True))
     job.score = result["score"]
     job.reasons = result["reasons"]
     job.missing_skills = result["missing_skills"]

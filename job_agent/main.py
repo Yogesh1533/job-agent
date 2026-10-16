@@ -4,6 +4,7 @@ import sys
 
 from dotenv import load_dotenv
 
+from job_agent import llm
 from job_agent import sources as sources_mod
 from job_agent.drafter import draft_application
 from job_agent.matcher import filter_jobs
@@ -14,6 +15,7 @@ from job_agent import student as student_mod
 from job_agent import ats
 
 SEPARATOR = "\n\n---\n\n"
+MAX_LLM_FAILURES_IN_A_ROW = 3  # then stop: a bad key or used-up free quota would fail every job
 
 
 def parse_args(argv=None):
@@ -69,6 +71,11 @@ def format_job(job, draft=None, error=None):
 
 def warn(msg):
     print(msg, file=sys.stderr)
+
+
+def describe(error):
+    """LLMError messages are already readable; for anything else include the type."""
+    return str(error) if isinstance(error, llm.LLMError) else f"{type(error).__name__}: {error}"
 
 
 def fetch_all(source_names, keywords, location, part_time=False):
@@ -198,6 +205,12 @@ def run_search(args, store):
         with open(args.resume) as f:
             resume_text = f.read()
 
+    if resume_text:
+        problem = llm.config_problem()
+        if problem:
+            warn(f"{problem} Showing jobs without AI scoring or cover notes.")
+            resume_text = None
+
     try:
         jobs = fetch_all(source_names, keywords, args.location, part_time=args.part_time)
     except SourceError as e:
@@ -221,11 +234,18 @@ def run_search(args, store):
 
     if resume_text:
         to_score = matched[: args.max_score]
+        failures = 0
         for job in to_score:
             try:
                 score_job(job, resume_text)
+                failures = 0
             except Exception as e:  # unscored jobs sink to the bottom
-                warn(f"Scoring failed for '{job.title}': {type(e).__name__}: {e}")
+                failures += 1
+                warn(f"Scoring failed for '{job.title}': {describe(e)}")
+                if failures >= MAX_LLM_FAILURES_IN_A_ROW:
+                    warn(f"Stopping AI scoring after {failures} failures in a row "
+                         "(rate limit, used-up free quota, or a bad key?). Remaining jobs are unscored.")
+                    break
         matched = sort_by_score(to_score)
         if args.part_time:
             matched = sorted(matched, key=student_mod.sort_key)
@@ -233,17 +253,20 @@ def run_search(args, store):
     matched = matched[: args.limit]
 
     out = open(args.output, "w") if args.output else sys.stdout
-    drafted = 0
+    drafted, draft_failures = 0, 0
     try:
         for i, job in enumerate(matched):
             draft, error = None, None
-            if resume_text and job.score is not None and drafted < args.draft_top:
+            if (resume_text and job.score is not None and drafted < args.draft_top
+                    and draft_failures < MAX_LLM_FAILURES_IN_A_ROW):
                 drafted += 1
                 try:
                     draft = draft_application(job, resume_text)
+                    draft_failures = 0
                 except Exception as e:  # keep going; one bad call shouldn't lose the rest
-                    error = f"Draft failed: {type(e).__name__}: {e}"
-                    warn(f"Draft failed for '{job.title}': {e}")
+                    draft_failures += 1
+                    error = f"Draft failed: {describe(e)}"
+                    warn(f"Draft failed for '{job.title}': {describe(e)}")
             if i:
                 out.write(SEPARATOR)
             out.write(format_job(job, draft, error))

@@ -11,7 +11,7 @@ It pulls jobs from four kinds of source:
 | `jooble` | Aggregator | key by request (optional) |
 | `remoteok` | Remote jobs | none |
 
-Then it filters them, scores each one against your resume with Claude, drafts cover
+Then it filters them, scores each one against your resume with AI, drafts cover
 notes for the best matches, and remembers what you've seen. A `--part-time` student
 mode checks each job against your student-visa hours cap. It does not submit applications.
 
@@ -25,7 +25,7 @@ and the `companies` source goes to the employer directly.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # add your ANTHROPIC_API_KEY
+cp .env.example .env   # add your GEMINI_API_KEY (free: aistudio.google.com/apikey)
 cp resume.example.txt resume.txt   # replace with your real resume
 ```
 
@@ -40,7 +40,7 @@ What a run does:
 1. **Fetches** jobs from Adzuna Australia (if `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are set; free keys at developer.adzuna.com) and RemoteOK. Pick with `--sources adzuna,remoteok`. If one source fails, the other still runs.
 2. **Filters** by whole-word keywords and location. `--location remote` keeps only remote jobs.
 3. **Hides** jobs you've already seen (stored in `jobs.db`). `--show-seen` brings them back.
-4. **Scores** up to `--max-score` jobs (default 30) against your resume with Claude: a 0-100 score, reasons, and missing skills. Results are sorted best first.
+4. **Scores** up to `--max-score` jobs (default 30) against your resume with AI: a 0-100 score, reasons, and missing skills. Results are sorted best first.
 5. **Drafts** cover notes for the top `--draft-top` jobs (default 5).
 
 Results are written as each job is processed, so one failed API call doesn't lose the rest.
@@ -81,7 +81,16 @@ python3 -m job_agent.main --mark-skipped remoteok:123 adzuna:4002
 python3 -m job_agent.main --list applied      # seen | applied | skipped | all
 ```
 
-The Claude model is set by `MODEL` in `.env` (default `claude-sonnet-5-5`).
+### AI provider
+
+Scoring and cover notes use the **Gemini API** (a free key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) works).
+Set `GEMINI_API_KEY` in `.env`; the model defaults to `gemini-3.5-flash-lite` (`GEMINI_MODEL` to change it).
+
+- Free keys have per-minute and per-day limits. Calls are spaced out (`GEMINI_MIN_INTERVAL`, default 4 s) and retried when rate limited.
+  If 3 calls in a row fail (e.g. the free quota ran out), it stops AI scoring and still lists the jobs. Lower `--max-score` to use fewer requests.
+- No key set? The job search still runs, just without scores or cover notes.
+- Free-tier prompts may be used by Google to improve its products, so leave your phone number and home address out of `resume.txt`.
+- To use Claude instead: `pip install anthropic`, then set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY`.
 
 ## Tests
 
