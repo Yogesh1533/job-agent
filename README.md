@@ -24,6 +24,18 @@ python3 -m job_agent.main --keywords "python,backend" --location remote --limit 
 
 Add `--resume resume.txt` to also generate an AI-drafted cover note per job.
 Add `--output results.md` to write results to a file instead of stdout.
+Results are written as each job is processed, so one failed API call doesn't lose the rest.
+
+`--location remote` keeps only jobs whose location or tags say remote/anywhere/worldwide.
+Keywords match whole words only (`ai` won't match `email`).
+
+The Claude model is set by `MODEL` in `.env` (default `claude-sonnet-5-5`).
+
+## Tests
+
+```
+python3 -m pytest -q
+```
 
 ## Status
 
