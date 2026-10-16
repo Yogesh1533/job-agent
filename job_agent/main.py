@@ -6,7 +6,9 @@ from dotenv import load_dotenv
 
 from job_agent.drafter import draft_application
 from job_agent.matcher import filter_jobs
-from job_agent.sources import fetch_remoteok_jobs
+from job_agent.sources import SourceError, fetch_remoteok_jobs
+
+SEPARATOR = "\n\n---\n\n"
 
 
 def parse_args():
@@ -19,7 +21,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def format_job(job, draft=None):
+def format_job(job, draft=None, error=None):
     lines = [
         f"## {job.title} — {job.company}",
         f"- Location: {job.location}",
@@ -27,6 +29,8 @@ def format_job(job, draft=None):
     ]
     if draft:
         lines.append(f"\n**Draft cover note:**\n\n{draft}")
+    elif error:
+        lines.append(f"\n_Draft failed: {error}_")
     return "\n".join(lines)
 
 
@@ -34,14 +38,7 @@ def main():
     load_dotenv()
     args = parse_args()
 
-    keywords = [k.strip() for k in args.keywords.split(",")] if args.keywords else None
-
-    jobs = fetch_remoteok_jobs()
-    matched = filter_jobs(jobs, keywords=keywords, location=args.location)[: args.limit]
-
-    if not matched:
-        print("No matching jobs found.")
-        return
+    keywords = [k.strip() for k in args.keywords.split(",") if k.strip()] if args.keywords else None
 
     resume_text = None
     if args.resume:
@@ -51,19 +48,41 @@ def main():
         with open(args.resume) as f:
             resume_text = f.read()
 
-    sections = []
-    for job in matched:
-        draft = draft_application(job, resume_text) if resume_text else None
-        sections.append(format_job(job, draft))
+    try:
+        jobs = fetch_remoteok_jobs()
+    except SourceError as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
 
-    output = "\n\n---\n\n".join(sections)
+    matched = filter_jobs(jobs, keywords=keywords, location=args.location)[: args.limit]
+
+    if not matched:
+        print("No matching jobs found.")
+        return
+
+    out = open(args.output, "w") if args.output else sys.stdout
+    failures = 0
+    try:
+        for i, job in enumerate(matched):
+            draft, error = None, None
+            if resume_text:
+                try:
+                    draft = draft_application(job, resume_text)
+                except Exception as e:  # keep going; one bad call shouldn't lose the rest
+                    error = f"{type(e).__name__}: {e}"
+                    failures += 1
+                    print(f"Draft failed for '{job.title}': {error}", file=sys.stderr)
+            if i:
+                out.write(SEPARATOR)
+            out.write(format_job(job, draft, error))
+            out.flush()  # each result is saved as soon as it's produced
+        out.write("\n")
+    finally:
+        if out is not sys.stdout:
+            out.close()
 
     if args.output:
-        with open(args.output, "w") as f:
-            f.write(output)
-        print(f"Wrote {len(matched)} job(s) to {args.output}")
-    else:
-        print(output)
+        print(f"Wrote {len(matched)} job(s) to {args.output}" + (f" ({failures} draft(s) failed)" if failures else ""))
 
 
 if __name__ == "__main__":
