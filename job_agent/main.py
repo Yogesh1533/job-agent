@@ -1,10 +1,13 @@
 import argparse
+import io
 import os
 import sys
 
 from dotenv import load_dotenv
 
+from job_agent import classify
 from job_agent import llm
+from job_agent import log
 from job_agent import sources as sources_mod
 from job_agent.drafter import draft_application
 from job_agent.matcher import filter_jobs
@@ -15,6 +18,8 @@ from job_agent import student as student_mod
 from job_agent import ats
 
 SEPARATOR = "\n\n---\n\n"
+MODE_LABEL = {"remote": "Remote", "hybrid": "Hybrid", "onsite": "On-site"}
+PAY_LABEL = {"paid": "Paid", "unpaid": "Unpaid"}
 MAX_LLM_FAILURES_IN_A_ROW = 3  # then stop: a bad key or used-up free quota would fail every job
 
 
@@ -29,6 +34,12 @@ def parse_args(argv=None):
     p.add_argument("--term-break", action="store_true", help="With --part-time: you're on a scheduled course break, so no hours cap")
     p.add_argument("--fits-only", action="store_true", help="With --part-time: only show jobs that fit your free hours")
     p.add_argument("--show-blocked", action="store_true", help="With --part-time: include jobs needing citizenship/PR/clearance/full work rights")
+    p.add_argument("--work-mode", type=_choices(classify.WORK_MODES), default=[],
+                   help="Only these work modes: remote,hybrid,onsite,unknown (unknown = ad doesn't say)")
+    p.add_argument("--pay", type=_choices(classify.PAY_OPTIONS), default=[],
+                   help="Only paid, unpaid and/or unknown, e.g. --pay paid")
+    p.add_argument("--job-type", type=_choices(classify.JOB_TYPES), default=[],
+                   help="Only these types: full_time,part_time,casual,internship,contract,unknown")
     p.add_argument("--discover", metavar="COMPANY", help="Find a company's careers-page feed and add it to the company list, then exit")
     p.add_argument("--limit", type=int, default=10, help="Max jobs to show (default 10)")
     p.add_argument("--max-score", type=int, default=30, help="Max jobs to send to Claude for scoring (default 30)")
@@ -52,6 +63,11 @@ def format_job(job, draft=None, error=None):
         f"- Location: {job.location}",
         f"- URL: {job.url}",
     ]
+    details = [MODE_LABEL.get(job.work_mode, ""), PAY_LABEL.get(job.pay, ""),
+               (job.employment_type or "").replace("_", "-"), job.salary_text, job.category]
+    details = [d for d in details if d]
+    if details:
+        lines.append("- Details: " + " · ".join(details))
     if job.reasons:
         lines.append("- Why: " + "; ".join(job.reasons))
     if job.missing_skills:
@@ -63,14 +79,31 @@ def format_job(job, draft=None, error=None):
         if c.positives:
             lines.append("- Student-friendly signs: " + ", ".join(c.positives))
     if draft:
-        lines.append(f"\n**Draft cover note:**\n\n{draft}")
+        lines.append(f"\n**Cover letter:**\n\n{draft}")
     elif error:
         lines.append(f"\n_{error}_")
     return "\n".join(lines)
 
 
-def warn(msg):
-    print(msg, file=sys.stderr)
+warn = log.warn
+
+# Search settings recorded with each run (shown in the dashboard's run history)
+RUN_PARAM_KEYS = ("keywords", "location", "sources", "part_time", "term_break", "fits_only",
+                  "show_blocked", "show_seen", "limit", "max_score", "draft_top", "resume",
+                  "work_mode", "pay", "job_type")
+
+
+def _choices(allowed):
+    def parse(value):
+        try:
+            return classify.parse_choice_list(value, allowed)
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(str(e))
+    return parse
+
+
+class RunFailed(Exception):
+    """A search couldn't run at all (missing resume, every source down...)."""
 
 
 def describe(error):
@@ -186,11 +219,34 @@ def main(argv=None):
         if handle_store_commands(args, store):
             return
         run_search(args, store)
+    except RunFailed:
+        sys.exit(1)  # already reported
     finally:
         store.close()
 
 
-def run_search(args, store):
+def run_search(args, store, trigger="cli", write_output=True):
+    """Run one search and record it (with its log and counts) in the runs table.
+    Returns (run_id, stats). Raises RunFailed if the search couldn't run."""
+    params = {k: getattr(args, k, None) for k in RUN_PARAM_KEYS}
+    run_id = store.start_run(trigger, params)
+    stats = {"fetched": 0, "matched": 0, "new": 0, "scored": 0, "drafted": 0, "shown": 0}
+    with log.capture() as lines:
+        try:
+            _search(args, store, run_id, stats, write_output)
+        except RunFailed as e:
+            warn(str(e))
+            store.finish_run(run_id, "failed", stats, lines, str(e))
+            raise
+        except Exception as e:
+            warn(f"Run crashed: {describe(e)}")
+            store.finish_run(run_id, "failed", stats, lines, describe(e))
+            raise
+        store.finish_run(run_id, "done", stats, lines)
+    return run_id, stats
+
+
+def _search(args, store, run_id, stats, write_output):
     keywords = [k.strip() for k in args.keywords.split(",") if k.strip()] if args.keywords else None
     source_names = (
         [s.strip().lower() for s in args.sources.split(",") if s.strip()]
@@ -200,8 +256,7 @@ def run_search(args, store):
     resume_text = None
     if args.resume:
         if not os.path.exists(args.resume):
-            warn(f"Resume file not found: {args.resume}")
-            sys.exit(1)
+            raise RunFailed(f"Resume file not found: {args.resume}")
         with open(args.resume) as f:
             resume_text = f.read()
 
@@ -214,10 +269,11 @@ def run_search(args, store):
     try:
         jobs = fetch_all(source_names, keywords, args.location, part_time=args.part_time)
     except SourceError as e:
-        warn(str(e))
-        sys.exit(1)
+        raise RunFailed(str(e)) from e
+    stats["fetched"] = len(jobs)
 
     matched = filter_jobs(jobs, keywords=keywords, location=args.location)
+    stats["matched"] = len(matched)
     if not args.show_seen:
         known = store.known_ids()
         hidden = sum(1 for j in matched if j.id in known)
@@ -225,11 +281,16 @@ def run_search(args, store):
         if hidden:
             warn(f"Hid {hidden} job(s) you've already seen (use --show-seen to include them).")
 
+    for job in matched:
+        classify.classify(job)
+    matched = classify.apply_filters(matched, args.work_mode, args.pay, args.job_type)
+
     if args.part_time:
         matched = apply_student_mode(args, matched)
+    stats["new"] = len(matched)
 
     if not matched:
-        print("No new matching jobs found.")
+        log.info("No new matching jobs found.")
         return
 
     if resume_text:
@@ -246,13 +307,17 @@ def run_search(args, store):
                     warn(f"Stopping AI scoring after {failures} failures in a row "
                          "(rate limit, used-up free quota, or a bad key?). Remaining jobs are unscored.")
                     break
+        stats["scored"] = sum(1 for j in to_score if j.score is not None)
         matched = sort_by_score(to_score)
         if args.part_time:
             matched = sorted(matched, key=student_mod.sort_key)
 
     matched = matched[: args.limit]
 
-    out = open(args.output, "w") if args.output else sys.stdout
+    if not write_output:
+        out = io.StringIO()
+    else:
+        out = open(args.output, "w") if args.output else sys.stdout
     drafted, draft_failures = 0, 0
     try:
         for i, job in enumerate(matched):
@@ -263,6 +328,7 @@ def run_search(args, store):
                 try:
                     draft = draft_application(job, resume_text)
                     draft_failures = 0
+                    stats["drafted"] += 1
                 except Exception as e:  # keep going; one bad call shouldn't lose the rest
                     draft_failures += 1
                     error = f"Draft failed: {describe(e)}"
@@ -271,14 +337,15 @@ def run_search(args, store):
                 out.write(SEPARATOR)
             out.write(format_job(job, draft, error))
             out.flush()  # each result is saved as soon as it's produced
-            store.mark_seen(job)
+            store.save_job(job, run_id=run_id, draft=draft, draft_error=error)
+            stats["shown"] += 1
         out.write("\n")
     finally:
         if out is not sys.stdout:
             out.close()
 
-    if args.output:
-        print(f"Wrote {len(matched)} job(s) to {args.output}")
+    if write_output and args.output:
+        log.info(f"Wrote {len(matched)} job(s) to {args.output}")
 
 
 if __name__ == "__main__":

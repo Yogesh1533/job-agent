@@ -45,6 +45,21 @@ def normalise_type(value):
     return ""
 
 
+def _mode(value):
+    from job_agent.classify import normalise_mode
+    return normalise_mode(value)
+
+
+def _salary(low, high, currency="AUD", interval="year"):
+    from job_agent.classify import fmt_salary
+    symbol = "$" if currency in (None, "", "AUD", "USD") else f"{currency} "
+    if currency == "USD":
+        symbol = "US$"
+    interval = {"per-year-salary": "year", "per-hour-wage": "hour", "per-month-salary": "month",
+                "per-week-salary": "week", "per-day-wage": "day"}.get(interval, interval or "year")
+    return fmt_salary(low, high, symbol, interval)
+
+
 def _html_to_text(html):
     import html as html_lib
     return re.sub(r"<[^>]+>", " ", html_lib.unescape(html or ""))
@@ -64,6 +79,7 @@ def parse_greenhouse(data, company):
             description=_html_to_text(j.get("content")),
             tags=[],
             source="greenhouse",
+            category=", ".join(d.get("name", "") for d in (j.get("departments") or []) if d.get("name")),
         ))
     return jobs
 
@@ -86,6 +102,11 @@ def parse_lever(data, company):
             tags=[t for t in [cats.get("team")] if t],
             source="lever",
             employment_type=normalise_type(cats.get("commitment")),
+            work_mode=_mode(j.get("workplaceType")),
+            salary_text=_salary((j.get("salaryRange") or {}).get("min"), (j.get("salaryRange") or {}).get("max"),
+                                (j.get("salaryRange") or {}).get("currency"), (j.get("salaryRange") or {}).get("interval"))
+            if j.get("salaryRange") else "",
+            category=cats.get("team") or "",
         ))
     return jobs
 
@@ -111,6 +132,8 @@ def parse_ashby(data, company):
             tags=[t for t in [j.get("department")] if t],
             source="ashby",
             employment_type=normalise_type(j.get("employmentType")),
+            work_mode=_mode(j.get("workplaceType")) or ("remote" if j.get("isRemote") else ""),
+            category=j.get("department") or "",
         ))
     return jobs
 
@@ -131,6 +154,8 @@ def parse_workable(data, company):
             tags=[t for t in [j.get("department")] if t],
             source="workable",
             employment_type=normalise_type(j.get("employment_type")),
+            work_mode="remote" if j.get("telecommuting") else "",
+            category=j.get("department") or "",
         ))
     return jobs
 
@@ -153,6 +178,8 @@ def parse_smartrecruiters(data, company):
             tags=[t for t in [(j.get("department") or {}).get("label")] if t],
             source="smartrecruiters",
             employment_type=normalise_type((j.get("typeOfEmployment") or {}).get("label")),
+            work_mode="hybrid" if loc.get("hybrid") else "remote" if loc.get("remote") else "",
+            category=(j.get("department") or {}).get("label") or "",
         ))
     return jobs
 

@@ -3,6 +3,7 @@ import sys
 
 import requests
 
+from job_agent import log
 from job_agent.models import Job
 
 REMOTEOK_API_URL = "https://remoteok.com/api"
@@ -12,6 +13,11 @@ USER_AGENT = "job-agent/0.3 (personal job search tool)"
 
 class SourceError(Exception):
     """Raised when a job source can't be fetched or parsed."""
+
+
+def _fmt_salary(low, high, symbol):
+    from job_agent.classify import fmt_salary
+    return fmt_salary(low, high, symbol)
 
 
 # --- RemoteOK -----------------------------------------------------------
@@ -41,6 +47,8 @@ def parse_remoteok_entries(entries):
                 tags=[t for t in (entry.get("tags") or []) if t],
                 source="remoteok",
                 employment_type=_remoteok_type(entry.get("tags")),
+                work_mode="remote",
+                salary_text=_fmt_salary(entry.get("salary_min"), entry.get("salary_max"), "US$"),
             )
         )
     return jobs
@@ -89,6 +97,9 @@ def parse_adzuna_results(data):
                 tags=[category] if category else [],
                 source="adzuna",
                 employment_type=_adzuna_type(r),
+                salary_text="" if str(r.get("salary_is_predicted")) == "1"
+                else _fmt_salary(r.get("salary_min"), r.get("salary_max"), "$"),
+                category=category or "",
             )
         )
     return jobs
@@ -160,6 +171,7 @@ def parse_jooble_results(data):
                 tags=[t for t in [r.get("source")] if t],
                 source="jooble",
                 employment_type=normalise_type(r.get("type")),
+                salary_text=(r.get("salary") or "").strip(),
             )
         )
     return jobs
@@ -208,7 +220,7 @@ def fetch_company_jobs(keywords=None, location=None, part_time=False):
         raise SourceError(f"Could not read {companies_file()}: {e}") from e
     jobs, errors = fetch_companies(companies)
     for err in errors:
-        print(f"Company feed failed: {err}", file=sys.stderr)
+        log.warn(f"Company feed failed: {err}")
     if not jobs and errors:
         raise SourceError("No company careers feeds could be fetched.")
     return jobs

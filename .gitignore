@@ -6,3 +6,5 @@ venv/
 resume.txt
 results.md
 jobs.db
+jobs.db-wal
+jobs.db-shm
