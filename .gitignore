@@ -5,3 +5,4 @@ venv/
 .env
 resume.txt
 results.md
+jobs.db
