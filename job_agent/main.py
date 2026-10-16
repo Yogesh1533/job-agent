@@ -10,6 +10,8 @@ from job_agent.matcher import filter_jobs
 from job_agent.scorer import score_job, sort_by_score
 from job_agent.sources import SourceError
 from job_agent.store import JobStore
+from job_agent import student as student_mod
+from job_agent import ats
 
 SEPARATOR = "\n\n---\n\n"
 
@@ -19,7 +21,13 @@ def parse_args(argv=None):
     p.add_argument("--keywords", help="Comma-separated keywords (e.g. 'python,cyber security,ai')")
     p.add_argument("--location", help="Location filter (e.g. 'Sydney' or 'remote')")
     p.add_argument("--resume", help="Plain-text resume. Enables AI scoring and cover notes.")
-    p.add_argument("--sources", help="Comma-separated: adzuna,remoteok (default: adzuna if keys are set, plus remoteok)")
+    p.add_argument("--sources", help="Comma-separated: companies,adzuna,jooble,remoteok (default: every source that's set up)")
+    p.add_argument("--companies", default="companies.json", help="Company careers-page list (default companies.json)")
+    p.add_argument("--part-time", action="store_true", help="Student mode: part-time/casual/internship only, checked against your visa hours cap")
+    p.add_argument("--term-break", action="store_true", help="With --part-time: you're on a scheduled course break, so no hours cap")
+    p.add_argument("--fits-only", action="store_true", help="With --part-time: only show jobs that fit your free hours")
+    p.add_argument("--show-blocked", action="store_true", help="With --part-time: include jobs needing citizenship/PR/clearance/full work rights")
+    p.add_argument("--discover", metavar="COMPANY", help="Find a company's careers-page feed and add it to the company list, then exit")
     p.add_argument("--limit", type=int, default=10, help="Max jobs to show (default 10)")
     p.add_argument("--max-score", type=int, default=30, help="Max jobs to send to Claude for scoring (default 30)")
     p.add_argument("--draft-top", type=int, default=5, help="Draft cover notes for the top N scored jobs (default 5)")
@@ -46,6 +54,12 @@ def format_job(job, draft=None, error=None):
         lines.append("- Why: " + "; ".join(job.reasons))
     if job.missing_skills:
         lines.append("- Missing: " + ", ".join(job.missing_skills))
+    c = job.student
+    if c is not None:
+        kind = (c.employment_type or "type not stated").replace("_", "-")
+        lines.append(f"- Student check: {student_mod.VERDICT_LABEL.get(c.verdict, c.verdict)} ({c.note}) · {kind}")
+        if c.positives:
+            lines.append("- Student-friendly signs: " + ", ".join(c.positives))
     if draft:
         lines.append(f"\n**Draft cover note:**\n\n{draft}")
     elif error:
@@ -57,7 +71,7 @@ def warn(msg):
     print(msg, file=sys.stderr)
 
 
-def fetch_all(source_names, keywords, location):
+def fetch_all(source_names, keywords, location, part_time=False):
     jobs, failures = [], []
     for name in source_names:
         fetch = sources_mod.SOURCES.get(name)
@@ -65,7 +79,7 @@ def fetch_all(source_names, keywords, location):
             failures.append(f"Unknown source: {name}")
             continue
         try:
-            jobs.extend(fetch(keywords=keywords, location=location))
+            jobs.extend(fetch(keywords=keywords, location=location, part_time=part_time))
         except SourceError as e:
             failures.append(str(e))
     for f in failures:
@@ -85,6 +99,51 @@ def dedupe(jobs):
         seen_keys.add(key)
         out.append(job)
     return out
+
+
+def handle_discover(args):
+    print(f"Looking for {args.discover} on Greenhouse, Lever, Ashby, Workable and SmartRecruiters...")
+    hits = ats.discover(args.discover)
+    if not hits:
+        print("No public careers feed found. They may use Workday or their own site; try a different spelling.")
+        return
+    best = max(hits, key=lambda h: h["jobs"])
+    for h in hits:
+        print(f"  {h['ats']:16} slug={h['slug']:20} {h['jobs']} open job(s)")
+    if ats.add_company(args.companies, best):
+        print(f"Added {best['name']} ({best['ats']}/{best['slug']}) to {args.companies}")
+    else:
+        print(f"{best['name']} is already in {args.companies}")
+
+
+def apply_student_mode(args, jobs):
+    """Annotate jobs with visa/hours checks and drop ones that don't suit a student."""
+    available = student_mod.available_fortnight_hours(args.term_break)
+    if available is None:
+        warn("Course-break mode: no hours cap applied.")
+    else:
+        cap = float(os.getenv("VISA_FORTNIGHT_CAP", "48"))
+        warn(f"Visa hours: {available:g} of {cap:g} h/fortnight free "
+             f"(set COMMITTED_FORTNIGHT_HOURS in .env to the hours your other jobs use).")
+
+    kept, dropped_type, dropped_blocked, dropped_hours = [], 0, 0, 0
+    for job in jobs:
+        job.student = student_mod.check_job(job, available)
+        if not job.student.is_part_time_friendly:
+            dropped_type += 1
+        elif job.student.verdict == "blocked" and not args.show_blocked:
+            dropped_blocked += 1
+        elif args.fits_only and job.student.verdict not in ("fits", "no_cap"):
+            dropped_hours += 1
+        else:
+            kept.append(job)
+    if dropped_type:
+        warn(f"Dropped {dropped_type} full-time or unclear job(s).")
+    if dropped_blocked:
+        warn(f"Dropped {dropped_blocked} job(s) needing citizenship/PR/clearance/full work rights (--show-blocked to see).")
+    if dropped_hours:
+        warn(f"Dropped {dropped_hours} job(s) that don't fit your free hours.")
+    return sorted(kept, key=student_mod.sort_key)
 
 
 def handle_store_commands(args, store):
@@ -111,6 +170,10 @@ def handle_store_commands(args, store):
 def main(argv=None):
     load_dotenv()
     args = parse_args(argv)
+    os.environ["COMPANIES_FILE"] = args.companies
+    if args.discover:
+        handle_discover(args)
+        return
     store = JobStore(args.db)
     try:
         if handle_store_commands(args, store):
@@ -136,7 +199,7 @@ def run_search(args, store):
             resume_text = f.read()
 
     try:
-        jobs = fetch_all(source_names, keywords, args.location)
+        jobs = fetch_all(source_names, keywords, args.location, part_time=args.part_time)
     except SourceError as e:
         warn(str(e))
         sys.exit(1)
@@ -148,6 +211,9 @@ def run_search(args, store):
         matched = [j for j in matched if j.id not in known]
         if hidden:
             warn(f"Hid {hidden} job(s) you've already seen (use --show-seen to include them).")
+
+    if args.part_time:
+        matched = apply_student_mode(args, matched)
 
     if not matched:
         print("No new matching jobs found.")
@@ -161,6 +227,8 @@ def run_search(args, store):
             except Exception as e:  # unscored jobs sink to the bottom
                 warn(f"Scoring failed for '{job.title}': {type(e).__name__}: {e}")
         matched = sort_by_score(to_score)
+        if args.part_time:
+            matched = sorted(matched, key=student_mod.sort_key)
 
     matched = matched[: args.limit]
 
