@@ -29,6 +29,22 @@ cp .env.example .env   # add your GEMINI_API_KEY (free: aistudio.google.com/apik
 cp resume.example.txt resume.txt   # replace with your real resume
 ```
 
+## Dashboard (web app)
+
+```
+python3 -m job_agent.web
+```
+
+This opens http://127.0.0.1:8765 in your browser. It runs only on your computer and costs nothing (no hosting, no paid services). Leave the terminal open while you use it, and press Ctrl+C to stop it.
+
+- **Dashboard:** new jobs to review, strong matches, what you've applied for, the last search and the next scheduled one.
+- **Jobs:** every job found, with filters (status, hours check, score, remote/hybrid/on-site, paid/unpaid, job type) and search. Click a job to see why it fits, missing skills, the visa hours check, and its documents.
+- **Cover letter and tailored resume:** written by the AI for each job, following humanizer rules (no dashes, no stock AI phrases) and using only facts from `resume.txt`. A tailored resume flags any number or skill that isn't in your real resume, so you can check it before sending. Copy or download as .txt.
+- **Runs:** history of every search (from the dashboard, the schedule or the command line), with counts and the log.
+- **Settings:** keywords, location, sources, kind of job, student visa mode, AI limits and a daily schedule. The schedule runs while the dashboard is open, and catches up when you next open it if it was missed.
+
+API keys stay in `.env` and are never shown in the page. The app refuses requests from other websites, and everything from job ads is shown as plain text.
+
 ## Usage
 
 ```
@@ -72,6 +88,14 @@ python3 -m job_agent.main --part-time --keywords "it support,helpdesk,cyber,ai" 
 
 These checks read the ad's text, so they can miss things. They're not legal advice:
 check your visa conditions with a registered migration agent.
+
+### Kind of job
+
+```
+python3 -m job_agent.main --work-mode remote,hybrid --pay paid --job-type casual,part_time
+```
+
+`--work-mode` takes remote, hybrid, onsite or unknown. `--pay` takes paid, unpaid or unknown. `--job-type` takes full_time, part_time, casual, internship, contract or unknown. "unknown" keeps ads that don't say. These are read from the job feed first and the ad's text second, so check the ad.
 
 ### Track what you did
 

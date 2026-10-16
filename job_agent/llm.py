@@ -8,6 +8,7 @@ Picked by LLM_PROVIDER, otherwise Gemini if GEMINI_API_KEY / GOOGLE_API_KEY is s
 otherwise Claude if ANTHROPIC_API_KEY is set.
 """
 import os
+import threading
 import time
 
 import requests
@@ -19,6 +20,7 @@ RETRY_STATUSES = (429, 500, 502, 503, 504)
 
 _sleep = time.sleep   # tests replace this
 _last_call = 0.0
+_throttle_lock = threading.Lock()  # the dashboard can write a letter while a search runs
 
 
 class LLMError(Exception):
@@ -81,11 +83,12 @@ def generate(prompt, max_tokens=500, json_mode=False):
 def _throttle():
     """Free keys have a requests-per-minute limit, so space calls out."""
     global _last_call
-    gap = float(os.getenv("GEMINI_MIN_INTERVAL", "4"))
-    wait = _last_call + gap - time.monotonic()
-    if wait > 0:
-        _sleep(wait)
-    _last_call = time.monotonic()
+    with _throttle_lock:
+        gap = float(os.getenv("GEMINI_MIN_INTERVAL", "4"))
+        wait = _last_call + gap - time.monotonic()
+        if wait > 0:
+            _sleep(wait)
+        _last_call = time.monotonic()
 
 
 def _retry_delay(response, attempt):

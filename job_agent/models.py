@@ -13,6 +13,12 @@ class Job:
     source: str = ""
     # "full_time", "part_time", "casual", "internship", "contract" or "" if unknown
     employment_type: str = ""
+    # "remote", "hybrid", "onsite" or "" if the ad doesn't say
+    work_mode: str = ""
+    # "paid", "unpaid" or "" if unknown
+    pay: str = ""
+    salary_text: str = ""
+    category: str = ""
     # Filled in by the scorer
     score: int = None
     reasons: list = field(default_factory=list)
