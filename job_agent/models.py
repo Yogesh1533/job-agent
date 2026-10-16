@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -10,3 +10,8 @@ class Job:
     url: str
     description: str
     tags: list
+    source: str = ""
+    # Filled in by the scorer
+    score: int = None
+    reasons: list = field(default_factory=list)
+    missing_skills: list = field(default_factory=list)

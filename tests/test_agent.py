@@ -1,5 +1,3 @@
-import sys
-
 
 from job_agent import main as main_mod
 from job_agent.drafter import DEFAULT_MODEL, get_model
@@ -89,11 +87,15 @@ def test_model_from_env(monkeypatch):
 # --- error handling -----------------------------------------------------
 
 def test_one_failed_draft_does_not_lose_other_results(tmp_path, monkeypatch):
-    jobs = [make_job("Python Dev", id="1"), make_job("Python Lead", id="2")]
-    monkeypatch.setattr(main_mod, "fetch_remoteok_jobs", lambda: jobs)
+    jobs = [make_job("Python Dev", id="remoteok:1"), make_job("Python Lead", id="remoteok:2")]
+    monkeypatch.setitem(main_mod.sources_mod.SOURCES, "remoteok", lambda **kw: list(jobs))
+
+    def fake_score(job, resume):
+        job.score = 90 if job.id.endswith("1") else 80
+    monkeypatch.setattr(main_mod, "score_job", fake_score)
 
     def fake_draft(job, resume):
-        if job.id == "1":
+        if job.id.endswith("1"):
             raise RuntimeError("API down")
         return "Great fit."
     monkeypatch.setattr(main_mod, "draft_application", fake_draft)
@@ -101,9 +103,8 @@ def test_one_failed_draft_does_not_lose_other_results(tmp_path, monkeypatch):
     resume = tmp_path / "resume.txt"
     resume.write_text("My resume")
     out = tmp_path / "results.md"
-    monkeypatch.setattr(sys, "argv", ["job_agent", "--keywords", "python",
-                                      "--resume", str(resume), "--output", str(out)])
-    main_mod.main()
+    main_mod.main(["--keywords", "python", "--sources", "remoteok", "--resume", str(resume),
+                   "--output", str(out), "--db", str(tmp_path / "jobs.db")])
 
     text = out.read_text()
     assert "Python Dev" in text and "Draft failed: RuntimeError: API down" in text
