@@ -1,0 +1,8 @@
+{
+  "_note": "Companies whose careers pages are fetched directly. Add more with: python3 -m job_agent.main --discover \"Company Name\"",
+  "companies": [
+    {"name": "Deputy", "ats": "lever", "slug": "deputy"},
+    {"name": "Culture Amp", "ats": "greenhouse", "slug": "cultureamp"},
+    {"name": "Airwallex", "ats": "ashby", "slug": "airwallex"}
+  ]
+}

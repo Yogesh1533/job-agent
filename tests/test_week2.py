@@ -35,7 +35,9 @@ def test_parse_adzuna_results():
     assert jobs[1].company == "" and jobs[1].tags == []
 
 
-def test_adzuna_needs_keys(monkeypatch):
+def test_adzuna_needs_keys(monkeypatch, tmp_path):
+    monkeypatch.setenv("COMPANIES_FILE", str(tmp_path / "none.json"))
+    monkeypatch.delenv("JOOBLE_API_KEY", raising=False)
     monkeypatch.delenv("ADZUNA_APP_ID", raising=False)
     monkeypatch.delenv("ADZUNA_APP_KEY", raising=False)
     assert sources.default_sources() == ["remoteok"]
@@ -43,7 +45,9 @@ def test_adzuna_needs_keys(monkeypatch):
         sources.fetch_adzuna_jobs()
 
 
-def test_adzuna_request(monkeypatch):
+def test_adzuna_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("COMPANIES_FILE", str(tmp_path / "none.json"))
+    monkeypatch.delenv("JOOBLE_API_KEY", raising=False)
     monkeypatch.setenv("ADZUNA_APP_ID", "id")
     monkeypatch.setenv("ADZUNA_APP_KEY", "key")
     calls = []
