@@ -1,6 +1,5 @@
 
 from job_agent import main as main_mod
-from job_agent.drafter import DEFAULT_MODEL, get_model
 from job_agent.matcher import filter_jobs
 from job_agent.models import Job
 from job_agent.sources import parse_remoteok_entries
@@ -73,15 +72,6 @@ def test_filter_handles_none_fields_on_job():
     job = Job(id="1", title=None, company=None, location=None, url="",
               description=None, tags=None)
     assert filter_jobs([job], keywords=["python"]) == []
-
-
-# --- model config -------------------------------------------------------
-
-def test_model_from_env(monkeypatch):
-    monkeypatch.delenv("MODEL", raising=False)
-    assert get_model() == DEFAULT_MODEL == "claude-sonnet-5-5"
-    monkeypatch.setenv("MODEL", "claude-haiku-5-5")
-    assert get_model() == "claude-haiku-5-5"
 
 
 # --- error handling -----------------------------------------------------

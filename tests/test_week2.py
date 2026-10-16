@@ -89,15 +89,15 @@ def test_parse_score_rejects_bad_replies(bad):
 
 
 def test_score_job_sets_fields():
-    class FakeClient:
-        class messages:
-            @staticmethod
-            def create(**kw):
-                class R: content = [type("T", (), {"text": '{"score": 70, "reasons": ["a"], "missing_skills": ["b"]}'})]
-                return R
+    calls = []
+
+    def fake_generate(prompt, max_tokens, json_mode=False):
+        calls.append(json_mode)
+        return '{"score": 70, "reasons": ["a"], "missing_skills": ["b"]}'
     job = make_job()
-    score_job(job, "resume", client=FakeClient)
+    score_job(job, "resume", generate=fake_generate)
     assert (job.score, job.reasons, job.missing_skills) == (70, ["a"], ["b"])
+    assert calls == [True]  # asks for JSON mode
 
 
 def test_sort_by_score_puts_unscored_last():
